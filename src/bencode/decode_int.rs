@@ -1,6 +1,6 @@
 use crate::bencode::BencodeParseError;
 
-pub fn parse_int(input: &[u8]) -> Result<(i128, &[u8]), BencodeParseError> {
+pub fn decode_int(input: &[u8]) -> Result<(i128, &[u8]), BencodeParseError> {
     if !input.starts_with(b"i") {
         return Err(BencodeParseError::MissingTerminator { expected: b'i' });
     }
@@ -27,31 +27,31 @@ mod tests {
     #[test]
     fn test_parse_int_success() {
         let input = b"i-100ei200e";
-        let res = parse_int(input);
+        let res = decode_int(input);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), (-100i128, &input[6..]));
     }
     #[test]
     fn test_parse_int_fail() {
-        let mut res = parse_int(b"ie");
+        let mut res = decode_int(b"ie");
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), BencodeParseError::EmptyIntegerFound);
-        res = parse_int(b"555555e");
+        res = decode_int(b"555555e");
         assert!(res.is_err());
         assert_eq!(
             res.err().unwrap(),
             BencodeParseError::MissingTerminator { expected: b'i' }
         );
-        res = parse_int(b"i55555");
+        res = decode_int(b"i55555");
         assert!(res.is_err());
         assert_eq!(
             res.err().unwrap(),
             BencodeParseError::MissingTerminator { expected: b'e' }
         );
-        res = parse_int(b"i-0000e");
+        res = decode_int(b"i-0000e");
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), BencodeParseError::NegativeZero);
-        res = parse_int(b"i012345e");
+        res = decode_int(b"i012345e");
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), BencodeParseError::LeadingZero);
     }

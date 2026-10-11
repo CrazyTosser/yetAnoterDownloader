@@ -1,4 +1,4 @@
-use crate::parser::{BencodeParseError, parse_int, parse_string};
+use crate::bencode::{BencodeParseError, decode_int, decode_string};
 use std::collections::BTreeMap;
 use std::mem;
 
@@ -127,7 +127,7 @@ fn unpack_frame(frame: Frame) -> Result<BencodeValue, BencodeParseError> {
     }
 }
 
-pub fn parse(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
+pub fn decode(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
     let mut stack: Vec<Frame> = Vec::new();
     loop {
         if stream.is_empty() {
@@ -135,7 +135,7 @@ pub fn parse(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
         }
         match stream[0] {
             b'i' => {
-                let (val, next) = parse_int(stream)?;
+                let (val, next) = decode_int(stream)?;
                 stream = &next;
                 if stack.is_empty() {
                     return Ok(BencodeValue::Integer(val));
@@ -158,7 +158,7 @@ pub fn parse(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
                 apply_frame(&mut stack, value)?;
             }
             b'0'..=b'9' => {
-                let (val, next) = parse_string(stream)?;
+                let (val, next) = decode_string(stream)?;
                 let value = BencodeValue::Bytes(val.to_vec());
                 stream = &next;
                 if stack.is_empty() {
@@ -176,7 +176,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_simple_list() {
-        let res = parse(b"li123ei456ei789ee");
+        let res = decode(b"li123ei456ei789ee");
         assert!(res.is_ok());
         assert_eq!(
             res.unwrap(),
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn test_simple_dict() {
-        let res = parse(b"d8:announce35:http://tracker.example.com/announce4:infod4:name4:testee");
+        let res = decode(b"d8:announce35:http://tracker.example.com/announce4:infod4:name4:testee");
         assert!(res.is_ok());
         let mut map = BTreeMap::new();
         map.insert(
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_inner_structs() {
-        let res = parse(b"d5:filesld6:lengthi1024e4:pathl4:dir14:fileeeee");
+        let res = decode(b"d5:filesld6:lengthi1024e4:pathl4:dir14:fileeeee");
         assert!(res.is_ok());
         let mut root = BTreeMap::new();
         let mut inner = BTreeMap::new();
