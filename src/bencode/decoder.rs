@@ -16,6 +16,7 @@ impl std::fmt::Display for BencodeValue {
     }
 }
 
+#[warn(dead_code)]
 impl BencodeValue {
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -65,7 +66,7 @@ impl BencodeValue {
                 } else {
                     write!(f, "{}<bytes len={}>", prefix, b.len())
                 }
-            },
+            }
             BencodeValue::List(items) => {
                 writeln!(f, "{}[", prefix)?;
                 for item in items {
@@ -73,7 +74,7 @@ impl BencodeValue {
                     writeln!(f)?;
                 }
                 write!(f, "{}]", prefix)
-            },
+            }
             BencodeValue::Dict(map) => {
                 writeln!(f, "{}{{", prefix)?;
                 for (key, value) in map {
@@ -151,6 +152,7 @@ pub fn decode(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
                 stack.push(Frame::DictKey(BTreeMap::new()));
             }
             b'e' => {
+                stream = &stream[1..];
                 if stack.len() == 1 {
                     return Ok(unpack_frame(stack.pop().unwrap())?);
                 }
@@ -173,6 +175,7 @@ pub fn decode(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::bencode::encoder;
     use super::*;
     #[test]
     fn test_simple_list() {
@@ -192,35 +195,47 @@ mod tests {
     fn test_simple_dict() {
         let res = decode(b"d8:announce35:http://tracker.example.com/announce4:infod4:name4:testee");
         assert!(res.is_ok());
-        let mut map = BTreeMap::new();
-        map.insert(
-            b"announce".to_vec(),
-            BencodeValue::Bytes(b"http://tracker.example.com/announce".to_vec()),
-        );
-        let mut inner = BTreeMap::new();
-        inner.insert(b"name".to_vec(), BencodeValue::Bytes(b"test".to_vec()));
-        map.insert(b"info".to_vec(), BencodeValue::Dict(inner));
-        assert_eq!(res.unwrap(), BencodeValue::Dict(map));
+
+        assert_eq!(res.unwrap(), BencodeValue::Dict(BTreeMap::from([
+            (b"announce".to_vec(), BencodeValue::Bytes(b"http://tracker.example.com/announce".to_vec())),
+            (b"info".to_vec(), BencodeValue::Dict(BTreeMap::from([
+                (b"name".to_vec(), BencodeValue::Bytes(b"test".to_vec()))
+            ])))
+        ])));
     }
 
     #[test]
     fn test_inner_structs() {
         let res = decode(b"d5:filesld6:lengthi1024e4:pathl4:dir14:fileeeee");
         assert!(res.is_ok());
-        let mut root = BTreeMap::new();
-        let mut inner = BTreeMap::new();
-        inner.insert(b"length".to_vec(), BencodeValue::Integer(1024));
-        inner.insert(
-            b"path".to_vec(),
-            BencodeValue::List(vec![
-                BencodeValue::Bytes(b"dir1".to_vec()),
-                BencodeValue::Bytes(b"file".to_vec()),
-            ]),
+        assert_eq!(
+            res.unwrap(),
+            BencodeValue::Dict(BTreeMap::from([(
+                b"files".to_vec(),
+                BencodeValue::List(vec![BencodeValue::Dict(BTreeMap::from([
+                    (b"length".to_vec(), BencodeValue::Integer(1024)),
+                    (b"path".to_vec(), BencodeValue::List(vec![
+                        BencodeValue::Bytes(b"dir1".to_vec()),
+                        BencodeValue::Bytes(b"file".to_vec()),
+                    ])),
+                ]))])
+            ),]))
         );
-        root.insert(
-            b"files".to_vec(),
-            BencodeValue::List(vec![BencodeValue::Dict(inner)]),
-        );
-        assert_eq!(res.unwrap(), BencodeValue::Dict(root));
+    }
+
+    #[test]
+    fn test_realfile() {
+        let ubuntu = include_bytes!("../../tests/fixtures/ubuntu-26.04.1-desktop-amd64.iso.torrent");
+        let p1 = decode(ubuntu).unwrap();
+        let info1 = p1.get(b"info").unwrap();
+        let mut enc1 = Vec::new();
+        encoder::encode(info1, &mut enc1);
+
+        let p2 = decode(ubuntu).unwrap();
+        let info2 = p2.get(b"info").unwrap();
+        let mut enc2 = Vec::new();
+        encoder::encode(info1, &mut enc2);
+
+        assert_eq!(enc1, enc2);
     }
 }

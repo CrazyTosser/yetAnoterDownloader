@@ -34,6 +34,4 @@ pub enum BencodeParseError {
     NoDataFound,
     #[error("wrong bencode structure")]
     WrongStructure,
-    #[error("expectedStringKey")]
-    ExpectedStringKey,
 }
