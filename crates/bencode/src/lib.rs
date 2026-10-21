@@ -1,6 +1,85 @@
-use crate::bencode::{BencodeParseError, decode_int, decode_string};
 use std::collections::BTreeMap;
 use std::mem;
+use std::num::ParseIntError;
+use std::str::Utf8Error;
+use thiserror::Error;
+
+#[derive(Error, Debug, PartialEq)]
+pub enum BencodeParseError {
+    #[error("empty integer found")]
+    EmptyIntegerFound,
+    #[error("missing terminator, expected '{expected}'")]
+    MissingTerminator {
+        expected: u8,
+    },
+    #[error("negative zero found")]
+    NegativeZero,
+    #[error("leading zero not approved")]
+    LeadingZero,
+    #[error(transparent)]
+    InvalidInteger(#[from] Utf8Error),
+    #[error(transparent)]
+    Parse(#[from] ParseIntError),
+
+    #[error("missing colon symbol")]
+    ColonMissing,
+    #[error("negative or zero size given: {given}")]
+    NegativeOrZeroSize {
+        given: i64,
+    },
+    #[error("unterminated string: expected len {expected}, got {got}")]
+    InsufficientData {
+        expected: usize,
+        got: usize,
+    },
+    #[error("input string is empty")]
+    NoDataFound,
+    #[error("wrong bencode structure")]
+    WrongStructure,
+}
+
+impl From<BencodeParseError> for std::io::Error {
+    fn from(err: BencodeParseError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string())
+    }
+}
+
+pub fn decode_int(input: &[u8]) -> Result<(i128, &[u8]), BencodeParseError> {
+    if !input.starts_with(b"i") {
+        return Err(BencodeParseError::MissingTerminator { expected: b'i' });
+    }
+    let end = input
+        .iter()
+        .position(|&b| b == b'e')
+        .ok_or(BencodeParseError::MissingTerminator { expected: b'e' })?;
+    let number = &input[1..end];
+    if number.is_empty() {
+        return Err(BencodeParseError::EmptyIntegerFound);
+    } else if number.len() >= 2 && number[0] == b'-' && number[1] == b'0' {
+        return Err(BencodeParseError::NegativeZero);
+    } else if number.len() >= 1 && number[0] == b'0' {
+        return Err(BencodeParseError::LeadingZero);
+    }
+    let s = std::str::from_utf8(number).map_err(|e| BencodeParseError::InvalidInteger(e))?;
+    let val = i128::from_str_radix(s, 10).map_err(|e| BencodeParseError::Parse(e))?;
+    Ok((val, &input[end + 1..]))
+}
+
+
+pub fn decode_string(input: &[u8]) -> Result<(&[u8], &[u8]), BencodeParseError> {
+    let delimeter = input.iter().position(|&b| b == b':')
+        .ok_or(BencodeParseError::ColonMissing)?;
+    let left = std::str::from_utf8(&input[..delimeter]).map_err(|e| BencodeParseError::InvalidInteger(e))?;
+    let size = i64::from_str_radix(&left, 10).map_err(|e| BencodeParseError::Parse(e))?;
+    if size < 0 {
+        return Err(BencodeParseError::NegativeOrZeroSize { given: size });
+    }
+    if delimeter + 1 + size as usize > input.len() {
+        return Err(BencodeParseError::InsufficientData { expected: size as usize, got: input.len() - delimeter - 1 });
+    }
+    Ok((&input[delimeter + 1..delimeter + 1 + (size as usize)], &input[delimeter + (size as usize) + 1..]))
+}
+
 
 #[derive(PartialEq, Debug)]
 pub enum BencodeValue {
@@ -173,10 +252,90 @@ pub fn decode(mut stream: &[u8]) -> Result<BencodeValue, BencodeParseError> {
     }
 }
 
+
+pub fn encode(value: &BencodeValue, buf: &mut Vec<u8>) {
+    match value {
+        BencodeValue::Integer(i) => {
+            buf.push(b'i');
+            buf.extend_from_slice(i.to_string().as_bytes());
+            buf.push(b'e');
+        }
+        BencodeValue::Bytes(b) => {
+            buf.extend_from_slice(b.len().to_string().as_bytes());
+            buf.push(b':');
+            buf.extend_from_slice(b);
+        }
+        BencodeValue::List(items) => {
+            buf.push(b'l');
+            for item in items {
+                encode(item, buf);
+            }
+            buf.push(b'e');
+        }
+        BencodeValue::Dict(map) => {
+            buf.push(b'd');
+            for (key, value) in map {
+                encode(&BencodeValue::Bytes(key.clone()), buf);
+                encode(value, buf);
+            }
+            buf.push(b'e');
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::bencode::encoder;
+    use std::collections::BTreeMap;
     use super::*;
+
+    #[test]
+    fn roundtrip_dict() {
+        let input = b"d4:name4:test6:lengthi100ee";
+        let parsed1 = decode(input).unwrap();
+
+        let mut encoded = Vec::new();
+        encode(&parsed1, &mut encoded);
+
+        let parsed2 = decode(&encoded).unwrap();
+
+        assert_eq!(parsed1, parsed2);
+    }
+
+    #[test]
+    fn encode_integer_zero() {
+        let mut buf = Vec::new();
+        encode(&BencodeValue::Integer(0), &mut buf);
+        assert_eq!(buf, b"i0e");
+    }
+
+    #[test]
+    fn encode_negative_integer() {
+        let mut buf = Vec::new();
+        encode(&BencodeValue::Integer(-42), &mut buf);
+        assert_eq!(buf, b"i-42e");
+    }
+
+    #[test]
+    fn encode_empty_string() {
+        let mut buf = Vec::new();
+        encode(&BencodeValue::Bytes(vec![]), &mut buf);
+        assert_eq!(buf, b"0:");
+    }
+
+    #[test]
+    fn encode_empty_list() {
+        let mut buf = Vec::new();
+        encode(&BencodeValue::List(vec![]), &mut buf);
+        assert_eq!(buf, b"le");
+    }
+
+    #[test]
+    fn encode_empty_dict() {
+        let mut buf = Vec::new();
+        encode(&BencodeValue::Dict(BTreeMap::new()), &mut buf);
+        assert_eq!(buf, b"de");
+    }
+
     #[test]
     fn test_simple_list() {
         let res = decode(b"li123ei456ei789ee");
@@ -225,17 +384,75 @@ mod tests {
 
     #[test]
     fn test_realfile() {
-        let ubuntu = include_bytes!("../../tests/fixtures/ubuntu-26.04.1-desktop-amd64.iso.torrent");
+        let ubuntu = include_bytes!("../tests/fixtures/ubuntu-26.04.1-desktop-amd64.iso.torrent");
         let p1 = decode(ubuntu).unwrap();
         let info1 = p1.get(b"info").unwrap();
         let mut enc1 = Vec::new();
-        encoder::encode(info1, &mut enc1);
+        encode(info1, &mut enc1);
 
         let p2 = decode(ubuntu).unwrap();
         let info2 = p2.get(b"info").unwrap();
         let mut enc2 = Vec::new();
-        encoder::encode(info1, &mut enc2);
+        encode(info1, &mut enc2);
 
         assert_eq!(enc1, enc2);
+    }
+
+    #[test]
+    fn test_parse_string() {
+        let input = b"4:spami123e";
+        let res = decode_string(input);
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert_eq!(res.0, b"spam");
+        assert_eq!(res.1, b"i123e");
+    }
+
+    #[test]
+    fn test_parse_string_invalid() {
+        let mut input: &[u8] = b"-10sssss";
+        let mut res = decode_string(input);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), BencodeParseError::ColonMissing);
+        input = b"-10:sdsss";
+        res = decode_string(input);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), BencodeParseError::NegativeOrZeroSize { given: -10 });
+        input = b"10:sdsss";
+        res = decode_string(input);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), BencodeParseError::InsufficientData { expected: 10, got: 5 });
+    }
+
+    #[test]
+    fn test_parse_int_success() {
+        let input = b"i-100ei200e";
+        let res = decode_int(input);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), (-100i128, &input[6..]));
+    }
+    #[test]
+    fn test_parse_int_fail() {
+        let mut res = decode_int(b"ie");
+        assert!(res.is_err());
+        assert_eq!(res.err().unwrap(), BencodeParseError::EmptyIntegerFound);
+        res = decode_int(b"555555e");
+        assert!(res.is_err());
+        assert_eq!(
+            res.err().unwrap(),
+            BencodeParseError::MissingTerminator { expected: b'i' }
+        );
+        res = decode_int(b"i55555");
+        assert!(res.is_err());
+        assert_eq!(
+            res.err().unwrap(),
+            BencodeParseError::MissingTerminator { expected: b'e' }
+        );
+        res = decode_int(b"i-0000e");
+        assert!(res.is_err());
+        assert_eq!(res.err().unwrap(), BencodeParseError::NegativeZero);
+        res = decode_int(b"i012345e");
+        assert!(res.is_err());
+        assert_eq!(res.err().unwrap(), BencodeParseError::LeadingZero);
     }
 }

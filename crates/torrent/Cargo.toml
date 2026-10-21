@@ -1,0 +1,9 @@
+[package]
+name = "torrent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bencode = {path = "../bencode"}
+thiserror.workspace = true
+sha1.workspace = true

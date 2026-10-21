@@ -1,22 +1,25 @@
-mod bencode;
-pub mod bittorrent;
-
 use bencode::*;
-use bittorrent::*;
-use tokio_util::sync::CancellationToken;
+use torrent::*;
+use tracker::*;
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
-async fn main() -> Result<(), tokio::io::Error> {
-    let data = std::fs::read("C:\\Users\\user\\RustroverProjects\\yetAnoterDownloader\\tests\\fixtures\\ubuntu-26.04.1-desktop-amd64.iso.torrent").unwrap();
-    let parse_res = decode(&data).unwrap();
-    let mut bittorrent_loader = request::announcement(parse_res).await.unwrap();
-    
+async fn main() -> Result<(), errors::AppError> {
+    let data = std::fs::read("C:\\Users\\user\\RustroverProjects\\yetAnoterDownloader\\tests\\fixtures\\ubuntu-26.04.1-desktop-amd64.iso.torrent")?;
+    let torrent_file = decode(&data)?;
+    is_valid_file(&torrent_file)?;
+    let (mut announcer, mut manager) = announcement(torrent_file).await.unwrap();
+
     let cancellation = CancellationToken::new();
-    let cancellation_token = cancellation.clone();
+    let cancellation_announcer = cancellation.clone();
+    let cancellation_manager = cancellation.clone();
 
     tokio::spawn(async move {
-        bittorrent_loader.updater_loop(cancellation_token.clone()).await.unwrap();
+        manager.run(cancellation_manager).await.unwrap();
+    });
+    tokio::spawn(async move {
+        announcer.updater_loop(cancellation_announcer).await.unwrap();
     });
 
     tokio::select! {
