@@ -1,56 +1,82 @@
-use bencode::BencodeValue;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use futures::{stream, StreamExt};
+use std::collections::HashMap;
+use std::error::Error;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+use tokio::net::{TcpStream};
+use tokio::select;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
+use torrent::TransferStats;
 
-pub fn extract_peers(responce: BencodeValue) -> Vec<SocketAddr> {
-    let mut res = Vec::new();
-    if let Some(peers_value) = responce.get(b"peers") {
-        match peers_value {
-            BencodeValue::Bytes(raw) => {
-                for chunck in raw.chunks(6) {
-                    if chunck.len() != 6 {
-                        continue;
-                    }
-                    let ip = Ipv4Addr::new(chunck[0], chunck[1], chunck[2], chunck[3]);
-                    let port = u16::from_be_bytes([chunck[4], chunck[5]]);
-                    res.push(SocketAddr::new(IpAddr::from(ip), port));
-                };
-            }
-            BencodeValue::List(peers) => {
-                for v in peers {
-                    let ip = match v.get(b"ip").and_then(|it| it.as_str()).and_then(|s| s.parse::<IpAddr>().ok()) {
-                        Some(ip) => ip,
-                        None => continue,
-                    };
-                    let port = match v.get(b"port").and_then(|it| it.as_integer()) {
-                        Some(p) if p> 0 && p <=u16::MAX as i128 => p as u16,
-                        _ => continue,
-                    };
-                    res.push(SocketAddr::new(IpAddr::from(ip), port));
-                }
-            }
-            _ => {}
+enum PeerState {
+    Idle,
+}
+
+struct PeerConnection {
+    state: PeerState,
+    stream: TcpStream,
+    last_seen: Instant,
+}
+
+impl PeerConnection {
+    async fn new(addr: &SocketAddr) -> Result<PeerConnection, std::io::Error> {
+        let stream =
+            tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
+        Ok(Self {
+            state: PeerState::Idle,
+            stream,
+            last_seen: Instant::now(),
+        })
+    }
+}
+
+pub struct PeerManager {
+    peers_rx: mpsc::Receiver<Vec<SocketAddr>>,
+    stats_tx: Sender<TransferStats>,
+    peers: HashMap<SocketAddr, PeerConnection>,
+}
+
+impl PeerManager {
+    pub fn new(peers_rx: mpsc::Receiver<Vec<SocketAddr>>, stats_tx: Sender<TransferStats>) -> Self {
+        Self {
+            peers_rx,
+            stats_tx,
+            peers: HashMap::new(),
         }
     }
-    if let Some(peers6) = responce.get(b"peers6") {
-        if let Some(peers) = peers6.as_bytes() {
-            for chunck in peers.chunks(18) {
-                if chunck.len() != 18 {
-                    continue;
+
+    pub async fn run(
+        &mut self,
+        cancellation_token: CancellationToken,
+    ) -> Result<(), Box<dyn Error>> {
+        loop {
+            select! {
+                Some(new_peers) = self.peers_rx.recv() => {
+                    self.connect_new_peers(new_peers).await;
                 }
-                let ip = Ipv6Addr::new(
-                    u16::from_be_bytes([chunck[0], chunck[1]]),
-                    u16::from_be_bytes([chunck[2], chunck[3]]),
-                    u16::from_be_bytes([chunck[4], chunck[5]]),
-                    u16::from_be_bytes([chunck[6], chunck[7]]),
-                    u16::from_be_bytes([chunck[8], chunck[9]]),
-                    u16::from_be_bytes([chunck[10], chunck[11]]),
-                    u16::from_be_bytes([chunck[12], chunck[13]]),
-                    u16::from_be_bytes([chunck[14], chunck[15]]),
-                );
-                let port = u16::from_be_bytes([chunck[16], chunck[17]]);
-                res.push(SocketAddr::new(IpAddr::from(ip), port));
-            };
+                _ = cancellation_token.cancelled() => {
+                    break Ok(());
+                }
+            }
         }
     }
-    res
+
+    async fn connect_new_peers(&mut self, peers: Vec<SocketAddr>) {
+        let processes: Vec<_> = peers
+            .into_iter()
+            .filter(|p| !self.peers.contains_key(p))
+            .map(async move |peer| {
+                let conn = PeerConnection::new(&peer).await;
+                (peer, conn)
+            })
+            .collect();
+        let results: Vec<_> = stream::iter(processes).buffer_unordered(10).collect().await;
+        for (addr, res) in results {
+            if let Ok(conn) = res {
+                self.peers.insert(addr, conn);
+            }
+        }
+    }
 }

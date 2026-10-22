@@ -793,6 +793,10 @@ name = "peer"
 version = "0.1.0"
 dependencies = [
  "bencode",
+ "futures",
+ "tokio",
+ "tokio-util",
+ "torrent",
 ]
 
 [[package]]
@@ -1763,6 +1767,7 @@ version = "0.1.0"
 dependencies = [
  "bencode",
  "errors",
+ "peer",
  "tokio",
  "tokio-util",
  "torrent",

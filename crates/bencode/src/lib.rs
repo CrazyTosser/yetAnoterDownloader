@@ -393,7 +393,7 @@ mod tests {
         let p2 = decode(ubuntu).unwrap();
         let info2 = p2.get(b"info").unwrap();
         let mut enc2 = Vec::new();
-        encode(info1, &mut enc2);
+        encode(info2, &mut enc2);
 
         assert_eq!(enc1, enc2);
     }

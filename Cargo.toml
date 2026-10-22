@@ -10,10 +10,11 @@ resolver = "2"
 [dependencies]
 tokio = { version = "1.53.2", features = ["rt", "rt-multi-thread", "macros", "signal"] }
 tokio-util = "0.7.20"
-bencode = {path = "crates/bencode"}
-errors = {path = "crates/errors"}
-torrent = {path = "crates/torrent"}
-tracker = {path = "crates/tracker"}
+bencode = { path = "crates/bencode" }
+errors = { path = "crates/errors" }
+torrent = { path = "crates/torrent" }
+tracker = { path = "crates/tracker" }
+peer = { path = "crates/peer" }
 
 [workspace.dependencies]
 thiserror = "2.0.21"
