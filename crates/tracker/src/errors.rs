@@ -8,7 +8,7 @@ pub enum RequestError {
     AnnounceListSectionNotFound,
     #[error("peers list is empty")]
     PeersListEmpty,
-    #[error("intervals section not found")]
+    #[error("interval section not found")]
     IntervalsSectionNotFound,
     #[error("all requests failed")]
     AllRequestsFailed,

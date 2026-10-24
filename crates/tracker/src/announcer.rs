@@ -1,26 +1,34 @@
 use crate::errors::RequestError;
 use crate::{AnnouncementEvents, Announcer};
-use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
 use reqwest::get;
 use std::error::Error;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use torrent::TransferStats;
+use tracing::{error, info, warn};
 
-async fn try_announce_url(url: &str) -> Result<Vec<SocketAddr>, RequestError> {
+async fn try_announce_url(url: &str) -> Result<(Vec<SocketAddr>, Duration), RequestError> {
     match get(url).await {
         Ok(resp) => match resp.bytes().await {
             Ok(val) => match bencode::decode(&val) {
                 Ok(val) => {
-                    let peers = torrent::extract_peers(val);
+                    let peers = torrent::extract_peers(&val);
                     if peers.is_empty() {
                         return Err(RequestError::PeersListEmpty);
                     }
-                    Ok(peers)
+                    let inst = Duration::from_secs(if val.get(b"interval").is_some() {
+                        val.get(b"interval")
+                            .ok_or(RequestError::IntervalsSectionNotFound)?
+                            .as_integer()
+                            .ok_or(RequestError::IntervalsSectionNotFound)? as u64
+                    } else { 1800 });
+
+                    Ok((peers, inst))
                 }
                 Err(e) => Err(RequestError::BencodeParseError(e)),
             },
@@ -47,7 +55,7 @@ impl Announcer {
         }
     }
 
-    async fn announce_tier(&self, urls: Vec<String>) -> Result<Vec<SocketAddr>, RequestError> {
+    async fn announce_tier(&self, urls: Vec<String>) -> Result<(Vec<SocketAddr>, Duration), RequestError> {
         let cnl = CancellationToken::new();
         let mut handlers = vec![];
         for url in urls {
@@ -76,46 +84,44 @@ impl Announcer {
         &mut self,
         event: &Option<AnnouncementEvents>,
     ) -> Result<(), Box<dyn Error>> {
+        let mut rng: StdRng = rand::make_rng();
         for tier in &self.trackers {
-            let mut shuffle = tier.clone();
-            shuffle.shuffle(&mut ThreadRng::default());
-            let mut urls = vec![];
-
-            for url in &shuffle {
-                urls.push(format!(
-                    "{}&downloaded={}&uploaded={}&left={}{}",
-                    url,
-                    self.stats.downloaded,
-                    self.stats.uploaded,
-                    self.stats.left,
-                    match event {
+            let mut shuffle: Vec<_> = tier.iter().collect();
+            shuffle.shuffle(&mut rng);
+            let urls = shuffle
+                .iter()
+                .map(|it| {
+                    let event_str = match event {
+                        Some(event) => format!("&event={}", event.to_str()),
                         None => String::new(),
-                        Some(event) => format!(
-                            "&event={}",
-                            match event {
-                                AnnouncementEvents::Started => "started",
-                                AnnouncementEvents::Completed => "completed",
-                                AnnouncementEvents::Stopped => "stopped",
-                            }
-                        ),
-                    }
-                ));
-            }
+                    };
+                    format!(
+                        "{}&downloaded={}&uploaded={}&left={}{}",
+                        it, self.stats.downloaded, self.stats.uploaded, self.stats.left, event_str
+                    )
+                })
+                .collect();
+
             match self.announce_tier(urls).await {
-                Ok(peers) => match self.peers_tx.send(peers).await {
-                    Err(e) => return Err(Box::new(e)),
-                    _ => return Ok(()),
-                },
-                Err(_) => {},
-                //Err(e) => return Err(e.into()),
+                Ok(peers) => {
+                    self.interval = peers.1;
+                    if !peers.0.is_empty() {
+                        self.peers_tx.send(peers.0).await?;
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    warn!(error = ?e, "cannot announce tier");
+                }
             }
         }
 
-        Err(Box::new(RequestError::AllRequestsFailed))
+        Err(RequestError::AllRequestsFailed.into())
     }
 
     pub async fn updater_loop(&mut self, token: CancellationToken) -> Result<(), Box<dyn Error>> {
-        self.update_peers(&Some(AnnouncementEvents::Started)).await?;
+        self.update_peers(&Some(AnnouncementEvents::Started))
+            .await?;
         let interval = self.interval;
         loop {
             select! {
@@ -123,13 +129,21 @@ impl Announcer {
                     self.update_peers(&Some(AnnouncementEvents::Stopped)).await?;
                     break Ok(());
                 },
-                _ = tokio::time::sleep(interval) =>
-                    return if let Err(e) = self.update_peers(&None).await {
-                        token.cancel();
-                        Err(e)
-                    } else {
-                    Ok(())
+                _ = tokio::time::sleep(interval) =>{
+                    let mut event = None;
+                    if self.stats.left == 0 {
+                        event = Some(AnnouncementEvents::Completed);
+                    }
+                    match self.update_peers(&event).await {
+                        Ok(_) => info!("update peers successful"),
+                        Err(e) => error!(error = ?e, "update peers error"),
+                    }
                 },
+                stats = self.stats_rx.recv() => {
+                    if let Some(stats) = stats {
+                        self.stats = stats;
+                    }
+                }
             }
         }
     }

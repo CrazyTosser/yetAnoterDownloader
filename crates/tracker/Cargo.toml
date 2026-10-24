@@ -12,3 +12,4 @@ rand.workspace = true
 reqwest.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
+tracing.workspace = true

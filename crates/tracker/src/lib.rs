@@ -3,11 +3,10 @@ pub mod announcer;
 
 pub use crate::errors::RequestError;
 use bencode::BencodeValue;
-use std::error::Error;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use torrent::TransferStats;
+use torrent::{compute_total_size, TorrentFileError, TransferStats};
 
 pub struct Announcer {
     trackers: Vec<Vec<String>>,
@@ -23,23 +22,37 @@ enum AnnouncementEvents {
     Stopped,
 }
 
+impl AnnouncementEvents {
+    fn to_str(&self) -> &'static str {
+        match self {
+            AnnouncementEvents::Started => "started",
+            AnnouncementEvents::Completed => "completed",
+            AnnouncementEvents::Stopped => "stopped",
+        }
+    }
+}
 
 pub async fn announcement(
     torrent: BencodeValue,
-) -> Result<(Announcer, (mpsc::Receiver<Vec<SocketAddr>>, mpsc::Sender<TransferStats>)), Box<dyn Error>> {
+) -> Result<(Announcer, (mpsc::Receiver<Vec<SocketAddr>>, mpsc::Sender<TransferStats>)), RequestError> {
     let info = torrent
         .get(b"info")
         .ok_or(RequestError::InfoSectionNotFound)?;
     let info_hash = torrent::calc_info_hash(info);
     let peer_id = torrent::gen_peer_id();
+    let total_size = if info.get(b"length").is_some() {
+        info.get(b"length")
+            .and_then(|it| it.as_integer())
+            .ok_or_else(|| TorrentFileError::WrongType {
+                name: "length".to_string(),
+            }).unwrap()
+    } else {
+        compute_total_size(info).unwrap()
+    };
     let stats = TransferStats {
         downloaded: 0,
         uploaded: 0,
-        left: info
-            .get(b"length")
-            .ok_or(RequestError::InfoSectionNotFound)?
-            .as_integer()
-            .ok_or(RequestError::InfoSectionNotFound)? as u64,
+        left: total_size as u64,
     };
 
     let announce_list = torrent
@@ -47,7 +60,7 @@ pub async fn announcement(
         .ok_or(RequestError::AnnounceListSectionNotFound)?
         .as_list()
         .ok_or(RequestError::AnnounceListSectionNotFound)?;
-    let prepared_urls: Vec<_> = announce_list
+    let mut prepared_urls: Vec<_> = announce_list
         .iter()
         .filter_map(|tier| tier.as_list())
         .map(|urls| {
@@ -58,18 +71,19 @@ pub async fn announcement(
         })
         .filter(|tier: &Vec<String>| !tier.is_empty())
         .collect();
-
-    let interval = info
-        .get(b"intervals")
-        .ok_or(RequestError::IntervalsSectionNotFound)?
-        .as_integer()
-        .ok_or(RequestError::IntervalsSectionNotFound)?;
+    if prepared_urls.is_empty() {
+        if let Some(url) = torrent.get(b"announce").and_then(|v| v.as_str()) {
+            prepared_urls.push(vec![gen_tracker_url(&info_hash, &peer_id, url, 6881)]);
+        } else {
+            return Err(RequestError::AnnounceListSectionNotFound);
+        }
+    }
 
     let (peers_tx, peers_rx) = mpsc::channel(32);
     let (stats_tx, stats_rx) = mpsc::channel(32);
     let service = Announcer::new(
         &prepared_urls,
-        Duration::from_secs(interval as u64),
+        Duration::new(1800, 0),
         peers_tx,
         stats_rx,
         stats,

@@ -20,7 +20,7 @@ pub fn is_valid_file(torrent_file: &BencodeValue) -> Result<(), TorrentFileError
     validate_info(info)
 }
 
-fn compute_total_size(info: &BencodeValue) -> Result<i128, TorrentFileError> {
+pub fn compute_total_size(info: &BencodeValue) -> Result<i128, TorrentFileError> {
     let files = info
         .get(b"files")
         .and_then(|it| it.as_list())
@@ -157,7 +157,7 @@ pub fn percent_encode_binary(data: &[u8]) -> String {
         .collect()
 }
 
-pub fn extract_peers(responce: BencodeValue) -> Vec<SocketAddr> {
+pub fn extract_peers(responce: &BencodeValue) -> Vec<SocketAddr> {
     let mut res = Vec::new();
     if let Some(peers_value) = responce.get(b"peers") {
         match peers_value {

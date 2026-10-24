@@ -8,19 +8,22 @@ members = ["crates/bencode", "crates/errors", "crates/peer", "crates/torrent", "
 resolver = "2"
 
 [dependencies]
-tokio = { version = "1.53.2", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
 tokio-util = "0.7.20"
 bencode = { path = "crates/bencode" }
 errors = { path = "crates/errors" }
 torrent = { path = "crates/torrent" }
 tracker = { path = "crates/tracker" }
 peer = { path = "crates/peer" }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
 [workspace.dependencies]
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 sha1 = "0.11.0"
 reqwest = "0.13.5"
-rand = "0.10.3"
+rand = { version = "0.10.3", features = ["thread_rng"] }
 tokio-util = "0.7.20"
 futures = "0.3.34"
+tracing = "0.1.44"
