@@ -9,7 +9,7 @@ use std::time::{Duration};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use torrent::TransferStats;
+use torrent::{TransferStats, StatsUpdate};
 use tracing::{error, info, warn};
 
 async fn try_announce_url(url: &str) -> Result<(Vec<SocketAddr>, Duration), RequestError> {
@@ -43,7 +43,7 @@ impl Announcer {
         trackers: &Vec<Vec<String>>,
         interval: Duration,
         tx: mpsc::Sender<Vec<SocketAddr>>,
-        rx: mpsc::Receiver<TransferStats>,
+        rx: mpsc::Receiver<StatsUpdate>,
         stats: TransferStats,
     ) -> Self {
         Self {
@@ -52,6 +52,7 @@ impl Announcer {
             peers_tx: tx,
             stats_rx: rx,
             stats,
+            complete_sent: false,
         }
     }
 
@@ -132,7 +133,11 @@ impl Announcer {
                 _ = tokio::time::sleep(interval) =>{
                     let mut event = None;
                     if self.stats.left == 0 {
+                        if self.complete_sent {
+                            return Ok(());
+                        }
                         event = Some(AnnouncementEvents::Completed);
+                        self.complete_sent = true;
                     }
                     match self.update_peers(&event).await {
                         Ok(_) => info!("update peers successful"),
@@ -140,8 +145,19 @@ impl Announcer {
                     }
                 },
                 stats = self.stats_rx.recv() => {
-                    if let Some(stats) = stats {
-                        self.stats = stats;
+                    match stats {
+                        Some(stats) => match stats {
+                            StatsUpdate::Downloaded(up) => {
+                                self.stats.downloaded += up;
+                                self.stats.left -= up;
+                            }
+                            StatsUpdate::Uploaded(up) => {
+                                self.stats.uploaded += up;
+                            }
+                        }
+                        _ => {
+                            error!(error = ?stats, "cannot get stats from announce channel");
+                        }
                     }
                 }
             }

@@ -1,7 +1,7 @@
-use thiserror::Error;
 use bencode::BencodeParseError;
-use tracker::RequestError;
+use thiserror::Error;
 use torrent::errors::TorrentFileError;
+use tracker::RequestError;
 
 #[derive(Error, Debug)]
 pub enum AppError {

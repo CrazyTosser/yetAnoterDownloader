@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 thiserror.workspace = true
 tokio.workspace = true
+config = {path = "../config" }
 bencode = { path = "../bencode" }
 torrent = { path = "../torrent" }
 rand.workspace = true

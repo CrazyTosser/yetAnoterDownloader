@@ -1,10 +1,11 @@
+use std::path::PathBuf;
+use ::errors::AppError;
 use bencode::*;
-use tracker::*;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
-use ::errors::AppError;
-use tracing_subscriber::{EnvFilter};
+use tracing_subscriber::EnvFilter;
+use tracker::*;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -33,9 +34,13 @@ async fn main() -> Result<(), AppError> {
         }
     };
 
-    let (mut announcer, manager_chan) = announcement(torrent_file).await?;
-    let mut manager = peer::PeerManager::new(manager_chan.0, manager_chan.1);
-
+    let (mut announcer, chan, mut manager_cfg) = announcement(torrent_file, 6881u16).await?;
+    manager_cfg.output_path = PathBuf::from("C:\\Users\\user\\RustroverProjects\\yetAnoterDownloader\\crates\\bencode\\tests\\fixtures\\ubuntu-26.04.1-desktop-amd64.iso.torrent");
+    let mut manager = peer::PeerManager::new(
+        chan.peers_rx,
+        chan.stats_tx,
+        manager_cfg,
+    );
 
     let cancellation = CancellationToken::new();
     let cancellation_announcer = cancellation.clone();
@@ -45,7 +50,10 @@ async fn main() -> Result<(), AppError> {
         manager.run(cancellation_manager).await.unwrap();
     });
     tokio::spawn(async move {
-        announcer.updater_loop(cancellation_announcer).await.unwrap();
+        announcer
+            .updater_loop(cancellation_announcer)
+            .await
+            .unwrap();
     });
 
     tokio::select! {

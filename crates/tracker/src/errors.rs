@@ -12,6 +12,8 @@ pub enum RequestError {
     IntervalsSectionNotFound,
     #[error("all requests failed")]
     AllRequestsFailed,
+    #[error("pieces list is empty")]
+    PiecesListEmpty,
     #[error("request error (0)")]
     ReqwestError(String),
     #[error("inner reqwest error (0)")]

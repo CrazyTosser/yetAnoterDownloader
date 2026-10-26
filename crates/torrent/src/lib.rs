@@ -13,6 +13,12 @@ pub struct TransferStats {
     pub left: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum StatsUpdate {
+    Downloaded(u64),
+    Uploaded(u64),
+}
+
 pub fn is_valid_file(torrent_file: &BencodeValue) -> Result<(), TorrentFileError> {
     torrent_file.as_dict().ok_or(TorrentFileError::WrongRoot)?;
     validate_announce(&torrent_file)?;

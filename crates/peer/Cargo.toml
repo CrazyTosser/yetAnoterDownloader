@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bencode = { path = "../bencode" }
+config = {path = "../config"}
 torrent = { path = "../torrent" }
 tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
+tracing.workspace = true
+hex.workspace = true
+bitvec.workspace = true
+sha1.workspace = true

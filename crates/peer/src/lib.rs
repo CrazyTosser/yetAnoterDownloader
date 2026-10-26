@@ -1,48 +1,47 @@
-use futures::{stream, StreamExt};
+pub mod connection;
+mod message;
+pub mod state;
+
+use crate::state::DownloadState;
+use config::MangerConfig;
+use connection::PeerConnection;
+use futures::{StreamExt, stream};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
-use tokio::net::{TcpStream};
+use std::sync::Arc;
 use tokio::select;
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc};
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use torrent::TransferStats;
-
-enum PeerState {
-    Idle,
-}
-
-struct PeerConnection {
-    state: PeerState,
-    stream: TcpStream,
-    last_seen: Instant,
-}
-
-impl PeerConnection {
-    async fn new(addr: &SocketAddr) -> Result<PeerConnection, std::io::Error> {
-        let stream =
-            tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
-        Ok(Self {
-            state: PeerState::Idle,
-            stream,
-            last_seen: Instant::now(),
-        })
-    }
-}
+use torrent::StatsUpdate;
 
 pub struct PeerManager {
     peers_rx: mpsc::Receiver<Vec<SocketAddr>>,
-    stats_tx: Sender<TransferStats>,
+    stats_tx: Sender<StatsUpdate>,
+    cfg: MangerConfig,
+    download_state: Arc<Mutex<DownloadState>>,
     peers: HashMap<SocketAddr, PeerConnection>,
 }
 
 impl PeerManager {
-    pub fn new(peers_rx: mpsc::Receiver<Vec<SocketAddr>>, stats_tx: Sender<TransferStats>) -> Self {
+    pub fn new(
+        peers_rx: mpsc::Receiver<Vec<SocketAddr>>,
+        stats_tx: Sender<StatsUpdate>,
+        manager_cfg: MangerConfig,
+    ) -> Self {
         Self {
             peers_rx,
             stats_tx,
+            cfg: manager_cfg.clone(),
+            download_state: Arc::new(Mutex::new(DownloadState::new(
+                manager_cfg.num_pieces,
+                manager_cfg.piece_length,
+                manager_cfg.total_size,
+                manager_cfg.output_path.clone(),
+                manager_cfg.piece_hashes.clone(),
+            ))),
             peers: HashMap::new(),
         }
     }
@@ -64,12 +63,15 @@ impl PeerManager {
     }
 
     async fn connect_new_peers(&mut self, peers: Vec<SocketAddr>) {
+        let cfg = self.cfg.clone();
         let processes: Vec<_> = peers
             .into_iter()
             .filter(|p| !self.peers.contains_key(p))
-            .map(async move |peer| {
-                let conn = PeerConnection::new(&peer).await;
-                (peer, conn)
+            .map(|peer| (peer, self.download_state.clone(), self.stats_tx.clone()))
+            .map(|it| async move {
+                let conn =
+                    PeerConnection::new(&it.0, cfg.peer_id, cfg.info_hash, cfg.num_pieces, it.1, it.2).await;
+                (it.0, conn)
             })
             .collect();
         let results: Vec<_> = stream::iter(processes).buffer_unordered(10).collect().await;
